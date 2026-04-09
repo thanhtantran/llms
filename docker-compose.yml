@@ -1,9 +1,9 @@
 services:
   llms:
-    image: ghcr.io/servicestack/llms:latest
+    image: thanhtantran/llms.py:v0.2
     container_name: llms-py
     ports:
-      - "8000:8000"
+      - "8808:8000"
     environment:
       # API Keys - Set these in your .env file or pass them directly
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
@@ -17,11 +17,12 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - VERBOSE=1
     volumes:
       # Maintain user-modifiable config files outside the container
       # llms.json and providers.json will be auto-created on first run
-      - ~/.llms:/home/llms/.llms
+      - ./.llms:/home/llms/.llms
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000').read()" ]

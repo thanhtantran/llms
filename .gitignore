@@ -1,3 +1,4 @@
+.llms/
 requests.json
 threads.json
 llms-home
