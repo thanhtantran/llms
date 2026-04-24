@@ -189,7 +189,9 @@ async function redoMessageFromThread(threadId, timestamp) {
 
     // Update the thread with the new messages
     const request = { messages: updatedMessages }
-    const api = await queueChat({ request, thread })
+
+    const model = thread.modelInfo
+    const api = await queueChat({ request, thread, model })
     if (api.response) {
         replaceThread(api.response)
     } else {
