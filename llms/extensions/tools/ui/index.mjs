@@ -776,7 +776,14 @@ export default {
             }
         })
 
-        ctx.chatRequestFilters.push(({ request, thread, context }) => {
+        ctx.chatRequestFilters.push(({ request, thread, context, model }) => {
+
+            // If model has tool_call:false explicitly disable tools
+            if (model && model.tool_call === false) {
+                request.metadata.tools = 'none'
+                return
+            }
+
             // Tool Preferences
             const prefs = ctx.prefs
             if (prefs.onlyTools != null) {
