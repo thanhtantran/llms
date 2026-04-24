@@ -346,6 +346,7 @@
         },
         "anthropic": {
             "enabled": true,
+            "npm": "@ai-sdk/anthropic-cli",
             "check": {
                 "messages": [
                     {
