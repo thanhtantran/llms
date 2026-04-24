@@ -2522,12 +2522,6 @@
   .bg-sky-50 {
     background-color: var(--color-sky-50);
   }
-  .bg-sky-50\/40 {
-    background-color: color-mix(in srgb, oklch(97.7% 0.013 236.62) 40%, transparent);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--color-sky-50) 40%, transparent);
-    }
-  }
   .bg-sky-50\/50 {
     background-color: color-mix(in srgb, oklch(97.7% 0.013 236.62) 50%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
@@ -2563,12 +2557,6 @@
   }
   .bg-slate-50\! {
     background-color: var(--color-slate-50) !important;
-  }
-  .bg-slate-50\/10 {
-    background-color: color-mix(in srgb, oklch(98.4% 0.003 247.858) 10%, transparent);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--color-slate-50) 10%, transparent);
-    }
   }
   .bg-slate-50\/50 {
     background-color: color-mix(in srgb, oklch(98.4% 0.003 247.858) 50%, transparent);
@@ -6739,6 +6727,62 @@
   .lg\:flex-row {
     @media (width >= 64rem) {
       flex-direction: row;
+    }
+  }
+  .lg\:bg-black\/50 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, #000 50%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-black) 50%, transparent);
+      }
+    }
+  }
+  .lg\:bg-black\/60 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, #000 60%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-black) 60%, transparent);
+      }
+    }
+  }
+  .lg\:bg-gray-800\/50 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, oklch(27.8% 0.033 256.848) 50%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-gray-800) 50%, transparent);
+      }
+    }
+  }
+  .lg\:bg-nord-900\/50 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, #2e3440 50%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-nord-900) 50%, transparent);
+      }
+    }
+  }
+  .lg\:bg-pink-100\/60 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, oklch(94.8% 0.028 342.258) 60%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-pink-100) 60%, transparent);
+      }
+    }
+  }
+  .lg\:bg-sky-50\/40 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, oklch(97.7% 0.013 236.62) 40%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-sky-50) 40%, transparent);
+      }
+    }
+  }
+  .lg\:bg-slate-50\/10 {
+    @media (width >= 64rem) {
+      background-color: color-mix(in srgb, oklch(98.4% 0.003 247.858) 10%, transparent);
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, var(--color-slate-50) 10%, transparent);
+      }
     }
   }
   .lg\:px-8 {
