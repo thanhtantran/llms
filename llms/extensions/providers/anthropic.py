@@ -1,10 +1,147 @@
 import asyncio
+import base64
 import json
 import os
 import shutil
 import time
 
 import aiohttp
+
+
+def detect_image_media_type(base64_data, declared_type=None):
+    """Detect actual image media type from base64 data magic bytes.
+    Falls back to declared_type if detection fails."""
+    try:
+        # Decode just enough bytes to check magic numbers
+        header = base64.b64decode(base64_data[:32])
+        if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+            return "image/webp"
+        elif header[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        elif header[:3] == b"\xff\xd8\xff":
+            return "image/jpeg"
+        elif header[:4] == b"GIF8":
+            return "image/gif"
+    except Exception:
+        pass
+    return declared_type or "image/png"
+
+
+def to_anthropic_messages(chat, ctx=None):
+    """Convert OpenAI-format chat messages to Anthropic message format.
+
+    Returns a tuple of (system_prompt, messages) where system_prompt is a string
+    or None, and messages is a list of Anthropic-format messages.
+    """
+    # Extract system message (Anthropic uses top-level 'system' parameter)
+    system_messages = []
+    for message in chat.get("messages", []):
+        if message.get("role") == "system":
+            content = message.get("content", "")
+            if isinstance(content, str):
+                system_messages.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "text":
+                        system_messages.append(item.get("text", ""))
+
+    system_prompt = "\n".join(system_messages) if system_messages else None
+
+    # Transform messages (exclude system messages)
+    messages = []
+    for message in chat.get("messages", []):
+        if message.get("role") == "system":
+            continue
+
+        if message.get("role") == "tool":
+            # Convert OpenAI tool response to Anthropic tool_result
+            tool_call_id = message.get("tool_call_id")
+            content = ctx.to_content(message.get("content", "")) if ctx else message.get("content", "")
+            if not isinstance(content, (str, list)):
+                content = str(content)
+
+            tool_result = {"type": "tool_result", "tool_use_id": tool_call_id, "content": content}
+
+            # Anthropic requires tool results to be in a user message
+            # Check if the last message was a user message, if so append to it
+            if messages and messages[-1]["role"] == "user":
+                messages[-1]["content"].append(tool_result)
+            else:
+                messages.append({"role": "user", "content": [tool_result]})
+            continue
+
+        anthropic_message = {"role": message.get("role"), "content": []}
+
+        # Handle interleaved thinking (must always be a list if present)
+        if "thinking" in message and message["thinking"]:
+            anthropic_message["content"].append({"type": "thinking", "thinking": message["thinking"]})
+
+        content = message.get("content", "")
+        if isinstance(content, str):
+            if anthropic_message["content"] or message.get("tool_calls"):
+                # If we have thinking or tools, we must use blocks for text
+                if content:
+                    anthropic_message["content"].append({"type": "text", "text": content})
+            else:
+                anthropic_message["content"] = content
+        elif isinstance(content, list):
+            for item in content:
+                if item.get("type") == "text":
+                    anthropic_message["content"].append({"type": "text", "text": item.get("text", "")})
+                elif item.get("type") == "image_url" and "image_url" in item:
+                    # Transform OpenAI image_url format to Anthropic format
+                    image_url = item["image_url"].get("url", "")
+                    if image_url.startswith("data:"):
+                        # Extract media type and base64 data
+                        parts = image_url.split(";base64,", 1)
+                        if len(parts) == 2:
+                            declared_type = parts[0].replace("data:", "")
+                            base64_data = parts[1]
+                            # Detect actual image type from bytes (file ext may not match after conversion)
+                            media_type = detect_image_media_type(base64_data, declared_type)
+                            anthropic_message["content"].append(
+                                {
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": media_type, "data": base64_data},
+                                }
+                            )
+                elif item.get("type") == "file" and "file" in item:
+                    # Transform OpenAI file format to Anthropic document format
+                    file_info = item["file"]
+                    file_data = file_info.get("file_data", "")
+                    if file_data.startswith("data:"):
+                        # Extract media type and base64 data from data URI
+                        parts = file_data.split(";base64,", 1)
+                        if len(parts) == 2:
+                            media_type = parts[0].replace("data:", "")
+                            b64_data = parts[1]
+                            anthropic_message["content"].append(
+                                {
+                                    "type": "document",
+                                    "source": {"type": "base64", "media_type": media_type, "data": b64_data},
+                                }
+                            )
+        # Handle tool_calls
+        if "tool_calls" in message and message["tool_calls"]:
+            # specific check for content being a string and not empty, because we might have converted it above
+            if isinstance(anthropic_message["content"], str):
+                anthropic_message["content"] = []
+                if content:
+                    anthropic_message["content"].append({"type": "text", "text": content})
+
+            for tool_call in message["tool_calls"]:
+                function = tool_call.get("function", {})
+                tool_use = {
+                    "type": "tool_use",
+                    "id": tool_call.get("id"),
+                    "name": function.get("name"),
+                    "input": json.loads(function.get("arguments", "{}")),
+                }
+                anthropic_message["content"].append(tool_use)
+
+        messages.append(anthropic_message)
+
+    return system_prompt, messages
 
 
 def install_anthropic(ctx):
@@ -38,101 +175,15 @@ def install_anthropic(ctx):
             chat = await self.process_chat(chat, provider_id=self.id)
 
             # Transform OpenAI format to Anthropic format
+            system_prompt, anthropic_messages = to_anthropic_messages(chat, ctx=ctx)
+
             anthropic_request = {
                 "model": chat["model"],
-                "messages": [],
+                "messages": anthropic_messages,
             }
 
-            # Extract system message (Anthropic uses top-level 'system' parameter)
-            system_messages = []
-            for message in chat.get("messages", []):
-                if message.get("role") == "system":
-                    content = message.get("content", "")
-                    if isinstance(content, str):
-                        system_messages.append(content)
-                    elif isinstance(content, list):
-                        for item in content:
-                            if item.get("type") == "text":
-                                system_messages.append(item.get("text", ""))
-
-            if system_messages:
-                anthropic_request["system"] = "\n".join(system_messages)
-
-            # Transform messages (exclude system messages)
-            for message in chat.get("messages", []):
-                if message.get("role") == "system":
-                    continue
-
-                if message.get("role") == "tool":
-                    # Convert OpenAI tool response to Anthropic tool_result
-                    tool_call_id = message.get("tool_call_id")
-                    content = ctx.to_content(message.get("content", ""))
-                    if not isinstance(content, (str, list)):
-                        content = str(content)
-
-                    tool_result = {"type": "tool_result", "tool_use_id": tool_call_id, "content": content}
-
-                    # Anthropic requires tool results to be in a user message
-                    # Check if the last message was a user message, if so append to it
-                    if anthropic_request["messages"] and anthropic_request["messages"][-1]["role"] == "user":
-                        anthropic_request["messages"][-1]["content"].append(tool_result)
-                    else:
-                        anthropic_request["messages"].append({"role": "user", "content": [tool_result]})
-                    continue
-
-                anthropic_message = {"role": message.get("role"), "content": []}
-
-                # Handle interleaved thinking (must always be a list if present)
-                if "thinking" in message and message["thinking"]:
-                    anthropic_message["content"].append({"type": "thinking", "thinking": message["thinking"]})
-
-                content = message.get("content", "")
-                if isinstance(content, str):
-                    if anthropic_message["content"] or message.get("tool_calls"):
-                        # If we have thinking or tools, we must use blocks for text
-                        if content:
-                            anthropic_message["content"].append({"type": "text", "text": content})
-                    else:
-                        anthropic_message["content"] = content
-                elif isinstance(content, list):
-                    for item in content:
-                        if item.get("type") == "text":
-                            anthropic_message["content"].append({"type": "text", "text": item.get("text", "")})
-                        elif item.get("type") == "image_url" and "image_url" in item:
-                            # Transform OpenAI image_url format to Anthropic format
-                            image_url = item["image_url"].get("url", "")
-                            if image_url.startswith("data:"):
-                                # Extract media type and base64 data
-                                parts = image_url.split(";base64,", 1)
-                                if len(parts) == 2:
-                                    media_type = parts[0].replace("data:", "")
-                                    base64_data = parts[1]
-                                    anthropic_message["content"].append(
-                                        {
-                                            "type": "image",
-                                            "source": {"type": "base64", "media_type": media_type, "data": base64_data},
-                                        }
-                                    )
-
-                # Handle tool_calls
-                if "tool_calls" in message and message["tool_calls"]:
-                    # specific check for content being a string and not empty, because we might have converted it above
-                    if isinstance(anthropic_message["content"], str):
-                        anthropic_message["content"] = []
-                        if content:
-                            anthropic_message["content"].append({"type": "text", "text": content})
-
-                    for tool_call in message["tool_calls"]:
-                        function = tool_call.get("function", {})
-                        tool_use = {
-                            "type": "tool_use",
-                            "id": tool_call.get("id"),
-                            "name": function.get("name"),
-                            "input": json.loads(function.get("arguments", "{}")),
-                        }
-                        anthropic_message["content"].append(tool_use)
-
-                anthropic_request["messages"].append(anthropic_message)
+            if system_prompt:
+                anthropic_request["system"] = system_prompt
 
             # Handle max_tokens (required by Anthropic, uses max_tokens not max_completion_tokens)
             if "max_completion_tokens" in chat:
@@ -301,45 +352,80 @@ def install_anthropic(ctx):
 
             chat = await self.process_chat(chat, provider_id=self.id)
 
-            # Extract system prompt from messages
-            system_messages = []
-            for message in chat.get("messages", []):
-                if message.get("role") == "system":
-                    content = message.get("content", "")
-                    if isinstance(content, str):
-                        system_messages.append(content)
-                    elif isinstance(content, list):
-                        for item in content:
-                            if item.get("type") == "text":
-                                system_messages.append(item.get("text", ""))
+            # Convert to Anthropic message format using shared method
+            system_prompt, anthropic_messages = to_anthropic_messages(chat, ctx=ctx)
 
-            # Build the user prompt from non-system messages
-            prompt_parts = []
-            for message in chat.get("messages", []):
-                if message.get("role") == "system":
-                    continue
-                role = message.get("role", "user")
-                content = message.get("content", "")
-                if isinstance(content, list):
-                    text_parts = []
-                    for item in content:
-                        if item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
-                    content = "\n".join(text_parts)
-                if content:
-                    if role == "assistant":
-                        prompt_parts.append(f"[assistant]: {content}")
+            # Build the stream-json user message with Anthropic-format content
+            # Find the last user message's content to use as the prompt
+            last_user_content = None
+            for msg in reversed(anthropic_messages):
+                if msg.get("role") == "user":
+                    last_user_content = msg.get("content")
+                    break
+
+            if last_user_content is None:
+                last_user_content = ""
+
+            # Build the stream-json input
+            stream_json_message = {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": last_user_content
+                    if isinstance(last_user_content, list)
+                    else [{"type": "text", "text": last_user_content}]
+                    if last_user_content
+                    else [{"type": "text", "text": ""}],
+                },
+            }
+
+            # If there are prior conversation messages, fold them into context
+            # The claude CLI stream-json only accepts 'user' and 'control' types
+            # So we prepend conversation history as context in the user message
+            conversation = []
+            if len(anthropic_messages) > 1:
+                history_parts = []
+                for msg in anthropic_messages[:-1]:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        # Extract text parts from content blocks
+                        text_parts = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                        content = "\n".join(text_parts) if text_parts else ""
+                    if content:
+                        history_parts.append(f"[{role}]: {content}")
+
+                if history_parts:
+                    history_context = (
+                        "Previous conversation:\n"
+                        + "\n\n".join(history_parts)
+                        + "\n\nContinue the conversation based on the above context."
+                    )
+                    # Prepend history to the user message content
+                    if isinstance(last_user_content, list):
+                        stream_json_message["message"]["content"] = [{"type": "text", "text": history_context}] + (
+                            last_user_content
+                            if isinstance(last_user_content, list)
+                            else [{"type": "text", "text": last_user_content}]
+                        )
                     else:
-                        prompt_parts.append(content)
-            prompt = "\n\n".join(prompt_parts)
+                        stream_json_message["message"]["content"] = [
+                            {"type": "text", "text": history_context},
+                            {"type": "text", "text": last_user_content or ""},
+                        ]
 
             # Build claude CLI command
             cmd = [
                 "claude",
                 "-p",
-                prompt,
+                "--input-format",
+                "stream-json",
                 "--output-format",
-                "json",
+                "stream-json",
+                "--verbose",
                 "--no-session-persistence",
             ]
 
@@ -349,8 +435,7 @@ def install_anthropic(ctx):
                 cmd.extend(["--model", model])
 
             # Add system prompt if present
-            if system_messages:
-                system_prompt = "\n".join(system_messages)
+            if system_prompt:
                 cmd.extend(["--system-prompt", system_prompt])
 
             # Add max tokens budget if specified
@@ -358,35 +443,51 @@ def install_anthropic(ctx):
             if max_tokens:
                 cmd.extend(["--max-budget-usd", str(max_tokens)])
 
-            ctx.log(f"Running: claude -p ... --output-format json --model {model}")
-            ctx.log(f"Prompt: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
+            # Build the JSON input: single user message with conversation context folded in
+            json_input = json.dumps(stream_json_message)
+
+            ctx.log(f"Running: claude -p --input-format stream-json --output-format stream-json --model {model}")
+            ctx.log(f"Messages: {len(anthropic_messages)}, System: {'yes' if system_prompt else 'no'}")
 
             started_at = time.time()
+            ctx.log(f"JSON input size: {len(json_input)} bytes")
 
             try:
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await process.communicate()
+                stdout, stderr = await process.communicate(input=json_input.encode("utf-8"))
 
                 if process.returncode != 0:
-                    error_msg = (
-                        stderr.decode("utf-8", errors="replace").strip()
-                        if stderr
-                        else f"claude exited with code {process.returncode}"
-                    )
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+                    stdout_text = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
+                    error_msg = stderr_text or stdout_text or f"claude exited with code {process.returncode}"
                     raise Exception(f"claude CLI error: {error_msg}")
 
-                # Parse the JSON response from claude CLI
+                # Parse stream-json output: multiple JSON objects, one per line
+                # Find the result object (type: "result")
                 output = stdout.decode("utf-8", errors="replace").strip()
-                # Remove any trailing ANSI escape sequences
-                if output.endswith("\x1b[<u"):
-                    output = output[:-4]
-                output = output.strip()
+                cli_response = None
+                for line in output.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Remove any ANSI escape sequences
+                    if line.endswith("\x1b[<u"):
+                        line = line[:-4].strip()
+                    try:
+                        obj = json.loads(line)
+                        if obj.get("type") == "result":
+                            cli_response = obj
+                            break
+                    except json.JSONDecodeError:
+                        continue
 
-                cli_response = json.loads(output)
+                if cli_response is None:
+                    raise Exception(f"No result found in claude CLI stream-json output")
 
             except json.JSONDecodeError as e:
                 raise Exception(f"Failed to parse claude CLI JSON output: {e}")
