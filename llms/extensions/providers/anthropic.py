@@ -1,4 +1,7 @@
+import asyncio
 import json
+import os
+import shutil
 import time
 
 import aiohttp
@@ -8,6 +11,8 @@ def install_anthropic(ctx):
     from llms.main import OpenAiCompatible
 
     class AnthropicProvider(OpenAiCompatible):
+        """Anthropic Provider using Anthropic API and API Pricing"""
+
         sdk = "@ai-sdk/anthropic"
 
         def __init__(self, **kwargs):
@@ -270,3 +275,183 @@ def install_anthropic(ctx):
             return ret
 
     ctx.add_provider(AnthropicProvider)
+
+    class AnthropicProviderCli(OpenAiCompatible):
+        """Anthropic Provider using local claude CLI to make use of an existing Claude Code subscription"""
+
+        sdk = "@ai-sdk/anthropic-cli"
+
+        def __init__(self, **kwargs):
+            if "api" not in kwargs:
+                kwargs["api"] = "https://api.anthropic.com/v1"
+            super().__init__(**kwargs)
+            self.chat_url = f"{self.api}/messages"
+            # Disable tool calling as CLI doesn't support it
+            for model in self.models.values():
+                model["tool_call"] = False
+            # print(f"Anthropic models = {json.dumps(self.models, indent=2)}")
+
+        def validate(self, **kwargs):
+            if not shutil.which("claude"):
+                return f"Provider '{self.name}' requires 'claude' in PATH"
+            return None
+
+        async def chat(self, chat, context=None):
+            chat["model"] = self.provider_model(chat["model"]) or chat["model"]
+
+            chat = await self.process_chat(chat, provider_id=self.id)
+
+            # Extract system prompt from messages
+            system_messages = []
+            for message in chat.get("messages", []):
+                if message.get("role") == "system":
+                    content = message.get("content", "")
+                    if isinstance(content, str):
+                        system_messages.append(content)
+                    elif isinstance(content, list):
+                        for item in content:
+                            if item.get("type") == "text":
+                                system_messages.append(item.get("text", ""))
+
+            # Build the user prompt from non-system messages
+            prompt_parts = []
+            for message in chat.get("messages", []):
+                if message.get("role") == "system":
+                    continue
+                role = message.get("role", "user")
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    text_parts = []
+                    for item in content:
+                        if item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                    content = "\n".join(text_parts)
+                if content:
+                    if role == "assistant":
+                        prompt_parts.append(f"[assistant]: {content}")
+                    else:
+                        prompt_parts.append(content)
+            prompt = "\n\n".join(prompt_parts)
+
+            # Build claude CLI command
+            cmd = [
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
+                "--no-session-persistence",
+            ]
+
+            # Map model name to claude CLI model aliases
+            model = chat.get("model", "")
+            if model:
+                cmd.extend(["--model", model])
+
+            # Add system prompt if present
+            if system_messages:
+                system_prompt = "\n".join(system_messages)
+                cmd.extend(["--system-prompt", system_prompt])
+
+            # Add max tokens budget if specified
+            max_tokens = chat.get("max_completion_tokens") or chat.get("max_tokens")
+            if max_tokens:
+                cmd.extend(["--max-budget-usd", str(max_tokens)])
+
+            ctx.log(f"Running: claude -p ... --output-format json --model {model}")
+            ctx.log(f"Prompt: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
+
+            started_at = time.time()
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+
+                if process.returncode != 0:
+                    error_msg = (
+                        stderr.decode("utf-8", errors="replace").strip()
+                        if stderr
+                        else f"claude exited with code {process.returncode}"
+                    )
+                    raise Exception(f"claude CLI error: {error_msg}")
+
+                # Parse the JSON response from claude CLI
+                output = stdout.decode("utf-8", errors="replace").strip()
+                # Remove any trailing ANSI escape sequences
+                if output.endswith("\x1b[<u"):
+                    output = output[:-4]
+                output = output.strip()
+
+                cli_response = json.loads(output)
+
+            except json.JSONDecodeError as e:
+                raise Exception(f"Failed to parse claude CLI JSON output: {e}")
+            except FileNotFoundError:
+                raise Exception("claude CLI not found in PATH")
+
+            # Convert claude CLI response to OpenAI-compatible format
+            return ctx.log_json(self.to_cli_response(cli_response, chat, started_at, context=context))
+
+        def to_cli_response(self, cli_response, chat, started_at, context=None):
+            """Convert claude CLI JSON response to OpenAI-compatible format."""
+            if context is not None:
+                context["providerResponse"] = cli_response
+
+            is_error = cli_response.get("is_error", False)
+            result_text = cli_response.get("result", "")
+
+            ret = {
+                "id": cli_response.get("session_id", ""),
+                "object": "chat.completion",
+                "created": int(started_at),
+                "model": chat.get("model", ""),
+                "choices": [],
+                "usage": {},
+            }
+
+            # Create the choice object
+            choice = {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": result_text,
+                },
+                "finish_reason": "error" if is_error else "stop",
+            }
+            ret["choices"].append(choice)
+
+            # Transform usage from claude CLI format
+            usage = cli_response.get("usage", {})
+            input_tokens = (
+                usage.get("input_tokens", 0)
+                + usage.get("cache_creation_input_tokens", 0)
+                + usage.get("cache_read_input_tokens", 0)
+            )
+            output_tokens = usage.get("output_tokens", 0)
+            ret["usage"] = {
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            }
+
+            # Add metadata
+            ret["metadata"] = {
+                "duration": cli_response.get("duration_ms", int((time.time() - started_at) * 1000)),
+            }
+
+            # Add cost if available
+            if "total_cost_usd" in cli_response:
+                ret["metadata"]["cost_usd"] = cli_response["total_cost_usd"]
+
+            if chat is not None and "model" in chat:
+                cost = self.model_cost(chat["model"])
+                if cost and "input" in cost and "output" in cost:
+                    ret["metadata"]["pricing"] = f"{cost['input']}/{cost['output']}"
+
+            return ret
+
+    ctx.add_provider(AnthropicProviderCli)
