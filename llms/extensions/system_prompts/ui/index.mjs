@@ -208,7 +208,13 @@ const SystemPromptEditor = {
         onMounted(() => {
             document.addEventListener('click', closeFinder)
             if (ext.prefs.prompt) {
-                emit('update:modelValue', ext.prefs.prompt)
+                const promptValue = typeof ext.prefs.prompt === 'object'
+                    ? ext.prefs.prompt.value
+                    : ext.prefs.prompt
+                if (promptValue) {
+                    emit('update:modelValue', promptValue)
+                    ext.setPrefs({ systemPrompt: promptValue })
+                }
             }
         })
         onUnmounted(() => {
@@ -240,7 +246,7 @@ export default {
                 }
             }
         })
-        ext.setPrefs({ systemPrompt: '' })
+        if (!ext.prefs.systemPrompt) ext.setPrefs({ systemPrompt: '' })
 
         ctx.setTopIcons({
             system_prompts: {
