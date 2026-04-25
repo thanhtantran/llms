@@ -260,7 +260,7 @@ export function useChatPrompt(ctx) {
                 thread = await ctx.threads.startNewThread({ title, model, redirect })
             }
 
-            const ctxRequest = ctx.createChatContext({ request, thread })
+            const ctxRequest = ctx.createChatContext({ request, thread, model })
             ctx.chatRequestFilters.forEach(f => f(ctxRequest))
             ctx.completeChatContext(ctxRequest)
 
@@ -452,7 +452,7 @@ export function useChatPrompt(ctx) {
             console.debug(`thread title is '${thread.title}'`, request.title)
         }
 
-        const api = await ctx.threads.queueChat({ request, thread })
+        const api = await ctx.threads.queueChat({ request, thread, model })
         if (api.response) {
             // success
             editingMessage.value = null

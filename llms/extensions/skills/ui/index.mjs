@@ -868,12 +868,25 @@ export default {
             }
         })
 
-        ctx.chatRequestFilters.push(({ request, thread, context }) => {
+        ctx.chatRequestFilters.push(({ request, thread, context, model }) => {
 
             if (!ctx.tools?.isToolEnabled('skill')) {
                 console.log(`skills.chatRequestFilters: 'skill' tool is not enabled`)
                 return
             }
+
+            if (!model) {
+                console.log(`WARN skills.chatRequestFilters: no model`)
+            } else if (model.tool_call === false) {
+                console.log(`skills.chatRequestFilters: model ${model.id} ${model.name} tool_call:false`,
+                    JSON.stringify(model, null, 2)
+                )
+                return
+            }
+
+            // console.log('[skills.chatRequestFilters]',
+            //     JSON.stringify({ request, thread, context, model }, null, 2)
+            // )
 
             const prefs = ctx.prefs
             if (prefs.onlySkills != null) {

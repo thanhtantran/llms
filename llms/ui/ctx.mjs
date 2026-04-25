@@ -484,7 +484,7 @@ export class AppContext {
         return this.renderMarkdown(content)
     }
 
-    createChatContext({ request, thread, context }) {
+    createChatContext({ request, thread, context, model }) {
         if (!request.messages) request.messages = []
         if (!request.metadata) request.metadata = {}
         if (!context) context = {}
@@ -496,6 +496,7 @@ export class AppContext {
             request,
             thread,
             context,
+            model,
         }
     }
 
@@ -529,7 +530,7 @@ export class AppContext {
             request.messages.unshift({ role: 'system', content: newSystemPrompt })
         }
 
-        console.debug(`completeChatContext()`, request)
+        console.debug(`completeChatContext()`, request, context, thread)
     }
 
     resolveThemes(themes) {
