@@ -51,6 +51,12 @@ def main() -> int:
     parser.add_argument("--keep-build", action="store_true")
     args = parser.parse_args()
 
+    if not SPEC_PATH.is_file():
+        raise RuntimeError(
+            f"Desktop PyInstaller spec is missing: {SPEC_PATH}. "
+            "Ensure desktop/pyinstaller/llms-desktop.spec is included in the source checkout."
+        )
+
     actual_target = native_target()
     if args.target != actual_target:
         parser.error(

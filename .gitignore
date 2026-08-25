@@ -42,6 +42,7 @@ lib/
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!desktop/pyinstaller/llms-desktop.spec
 
 # Installer logs
 pip-log.txt
