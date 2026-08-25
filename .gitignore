@@ -212,6 +212,18 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Additive Tauri desktop build outputs (desktop source remains tracked)
+desktop/.venv/
+desktop/build/
+desktop/dist/
+desktop/src-tauri/resources/sidecar/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/icons/android/
+desktop/src-tauri/icons/ios/
+desktop/src-tauri/icons/Square*Logo.png
+desktop/src-tauri/icons/StoreLogo.png
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

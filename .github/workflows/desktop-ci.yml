@@ -1,0 +1,87 @@
+name: Desktop CI
+
+on:
+  pull_request:
+    paths:
+      - desktop/**
+      - llms/**
+      - pyproject.toml
+      - requirements.txt
+      - .github/workflows/desktop-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - desktop/**
+      - llms/**
+      - pyproject.toml
+      - requirements.txt
+      - .github/workflows/desktop-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            bundles: app
+            artifact: macos
+          - os: ubuntu-22.04
+            bundles: deb,appimage
+            artifact: linux
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Python build dependencies
+        run: python -m pip install -r desktop/requirements-build.txt
+
+      - name: Test Python package and desktop adapter
+        run: |
+          python -m unittest tests.test_integration tests.test_windows_compat
+          python -m unittest discover -s desktop/tests -p 'test_*.py'
+          python desktop/scripts/check-version.py
+
+      - name: Test native supervisor
+        run: |
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml
+          cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build and verify frozen sidecar
+        run: |
+          python desktop/scripts/build-sidecar.py
+          python desktop/scripts/verify-sidecar.py
+
+      - name: Build native bundle
+        uses: tauri-apps/tauri-action@v0.6.2
+        with:
+          projectPath: desktop
+          args: --bundles ${{ matrix.bundles }}
+
+      - name: Upload native bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: llms-desktop-${{ matrix.artifact }}
+          path: desktop/src-tauri/target/release/bundle/**
+          if-no-files-found: error
