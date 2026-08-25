@@ -154,6 +154,7 @@ def _get_windows_display_num() -> int:
     # Method 1: Try ctypes to enumerate monitors
     try:
         import ctypes
+        import ctypes.wintypes
 
         user32 = ctypes.windll.user32
 

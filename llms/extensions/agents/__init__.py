@@ -161,7 +161,7 @@ def install(ctx):
 
         user = ctx.get_username(req)
         user_skills_dir = os.path.join(ctx.get_user_path(user=user), "skills") if user else os.path.join(ctx.get_user_path(), "skills")
-        global_skills_dir = os.path.expanduser("~/.llms/.agent/skills")
+        global_skills_dir = ctx.get_home_path(os.path.join(".agent", "skills"))
         workspace_skills_dir = os.path.join(os.getcwd(), ".agent", "skills")
 
         skill_names = set()

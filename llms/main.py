@@ -17,6 +17,7 @@ import inspect
 import json
 import mimetypes
 import os
+import posixpath
 import random
 import re
 import shlex
@@ -162,12 +163,24 @@ def is_file_path(path):
     return path and len(path) < 1024 and os.path.exists(path)
 
 
+def path_is_within(path, directory):
+    """Check path containment with Windows drive and case semantics."""
+    path = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    directory = os.path.normcase(os.path.realpath(os.path.abspath(directory)))
+    try:
+        return os.path.commonpath([path, directory]) == directory
+    except ValueError:
+        return False
+
+
 def is_url(url):
     return url and (url.startswith("http://") or url.startswith("https://"))
 
 
 def get_filename(file):
-    return file.rsplit("/", 1)[1] if "/" in file else "file"
+    if "/" in file or "\\" in file:
+        return file.replace("\\", "/").rsplit("/", 1)[1]
+    return "file"
 
 
 def parse_args_params(args_str):
@@ -3039,7 +3052,11 @@ def print_status():
 
 
 def home_llms_path(filename):
-    home_dir = os.getenv("LLMS_HOME", os.path.join(os.getenv("HOME"), ".llms"))
+    home_dir = os.getenv("LLMS_HOME")
+    if not home_dir:
+        # expanduser uses USERPROFILE on Windows and HOME on Unix-like systems.
+        home_dir = os.path.join(os.path.expanduser("~"), ".llms")
+    home_dir = os.path.expanduser(home_dir)
     relative_path = os.path.join(home_dir, filename)
     # return resolved full absolute path
     return os.path.abspath(os.path.normpath(relative_path))
@@ -4277,7 +4294,7 @@ class ExtensionContext:
         raise Exception(f"Provider {sdk} not found")
 
     def register_ui_extension(self, index: str):
-        path = os.path.join(self.ext_prefix, index)
+        path = posixpath.join(self.ext_prefix, index)
         self.log(f"Registered UI extension: {path}")
         self.app.ui_extensions.append({"id": self.name, "path": path})
 
@@ -4326,15 +4343,18 @@ class ExtensionContext:
 
         async def serve_static(request):
             path = request.match_info["path"]
-            file_path = os.path.join(ext_dir, path)
-            if os.path.exists(file_path):
+            file_path = os.path.realpath(os.path.join(ext_dir, path))
+            if path_is_within(file_path, ext_dir) and os.path.isfile(file_path):
                 return web.FileResponse(file_path)
             return web.Response(status=404)
 
-        self.app.server_add_get.append((os.path.join(self.ext_prefix, "{path:.*}"), serve_static, {}))
+        self.app.server_add_get.append((posixpath.join(self.ext_prefix, "{path:.*}"), serve_static, {}))
 
     def web_path(self, method: str, path: str) -> str:
-        full_path = os.path.join(self.ext_prefix, path) if path else self.ext_prefix
+        # HTTP routes always use POSIX separators, including on Windows. A leading
+        # slash intentionally registers an application-level route rather than an
+        # extension-prefixed route, matching os.path.join's existing POSIX behavior.
+        full_path = posixpath.join(self.ext_prefix, path) if path else self.ext_prefix
         self.dbg(f"Registered {method:<6} {full_path}")
         return full_path
 
@@ -5414,9 +5434,9 @@ def cli_exec(cli_args, extra_args):
 
                 # Check for directory traversal for info path
                 try:
-                    cache_root = Path(get_cache_path())
+                    cache_root = Path(get_cache_path()).resolve()
                     requested_path = Path(info_path).resolve()
-                    if not str(requested_path).startswith(str(cache_root)):
+                    if not path_is_within(requested_path, cache_root):
                         _dbg(f"Forbidden: {requested_path} is not in {cache_root}")
                         return web.Response(text="403: Forbidden", status=403)
                 except Exception as e:
@@ -5432,9 +5452,9 @@ def cli_exec(cli_args, extra_args):
 
             # Check for directory traversal
             try:
-                cache_root = Path(get_cache_path())
+                cache_root = Path(get_cache_path()).resolve()
                 requested_path = Path(full_path).resolve()
-                if not str(requested_path).startswith(str(cache_root)):
+                if not path_is_within(requested_path, cache_root):
                     _dbg(f"Forbidden: {requested_path} is not in {cache_root}")
                     return web.Response(text="403: Forbidden", status=403)
             except Exception as e:

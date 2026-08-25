@@ -125,6 +125,9 @@ class TestFilenameUtils(unittest.TestCase):
     def test_get_filename_with_multiple_slashes(self):
         self.assertEqual(get_filename("/path/to/nested/file.txt"), "file.txt")
 
+    def test_get_filename_with_windows_path(self):
+        self.assertEqual(get_filename(r"C:\Users\alice\Documents\file.txt"), "file.txt")
+
 
 class TestParseArgsParams(unittest.TestCase):
     """Test URL parameter parsing."""

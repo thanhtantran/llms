@@ -31,6 +31,7 @@ class TestAgentsProfileManager(AioHTTPTestCase):
         mock_ctx = MagicMock()
         mock_ctx.get_username = lambda req: "admin"
         mock_ctx.get_user_path = lambda user=None: self.user_dir
+        mock_ctx.get_home_path = lambda name="": os.path.join(self.temp_dir, name)
         mock_ctx.dbg = lambda msg: None
         mock_ctx.app.tools = {"run_bash": lambda: None, "read_file": lambda: None}
         mock_ctx.app.tool_groups = {"skills": ["create_plan"]}

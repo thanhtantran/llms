@@ -6,6 +6,7 @@ Unit tests for configuration and provider management in llms.main module.
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 # Add parent directory to path to import llms module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -22,12 +23,17 @@ class TestHomeLlmsPath(unittest.TestCase):
     def test_home_llms_path(self):
         result = home_llms_path("llms.json")
         self.assertIsInstance(result, str)
-        self.assertTrue(result.endswith("/.llms/llms.json"))
+        self.assertTrue(result.endswith(os.path.join(".llms", "llms.json")))
 
     def test_home_llms_path_providers(self):
         result = home_llms_path("providers.json")
         self.assertIsInstance(result, str)
-        self.assertTrue(result.endswith("/.llms/providers.json"))
+        self.assertTrue(result.endswith(os.path.join(".llms", "providers.json")))
+
+    def test_llms_home_does_not_require_home_environment_variable(self):
+        custom_home = os.path.abspath(os.path.join("test-data", "llms-home"))
+        with patch.dict(os.environ, {"LLMS_HOME": custom_home}, clear=True):
+            self.assertEqual(home_llms_path("llms.json"), os.path.join(custom_home, "llms.json"))
 
 
 class TestProviderStatus(unittest.TestCase):

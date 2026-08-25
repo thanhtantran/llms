@@ -3,6 +3,7 @@ import base64
 import os
 import shlex
 import shutil
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict, get_args
@@ -11,7 +12,7 @@ from uuid import uuid4
 from .base import BaseTool, ToolError, ToolResult
 from .run import run
 
-OUTPUT_DIR = "/tmp/outputs"
+OUTPUT_DIR = os.path.join(tempfile.gettempdir(), "llms", "outputs")
 
 TYPING_DELAY_MS = 12
 TYPING_GROUP_SIZE = 50

@@ -20,6 +20,16 @@ DEFAULT_PUBLISH_AVATARS_PATH = "/publish/avatar/{profile}"
 DEFAULT_PUBLISH_TO_CACHE_PATH = "/publish/cache"
 
 
+def is_path_within(path: str, directory: str) -> bool:
+    """Return whether path is inside directory, including Windows drive/case rules."""
+    path = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    directory = os.path.normcase(os.path.realpath(os.path.abspath(directory)))
+    try:
+        return os.path.commonpath([path, directory]) == directory
+    except ValueError:
+        return False
+
+
 def sanitize_publish_path(publish: Optional[str], project_dir: Optional[str] = None) -> str:
     if not publish or not publish.strip():
         return ""
@@ -31,9 +41,9 @@ def sanitize_publish_path(publish: Optional[str], project_dir: Optional[str] = N
 
         if os.path.isabs(publish):
             abs_publish = os.path.abspath(publish)
-            if abs_publish == abs_project:
+            if os.path.normcase(abs_publish) == os.path.normcase(abs_project):
                 return ""
-            if abs_publish.startswith(abs_project + os.sep):
+            if is_path_within(abs_publish, abs_project):
                 rel = os.path.relpath(abs_publish, abs_project)
                 parts = [p for p in re.split(r"[/\\]+", rel) if p and p != "." and p != ".."]
                 return "/".join(parts)
@@ -191,7 +201,7 @@ def install(ctx):
         clean_rel = sanitize_publish_path(path_param, project_dir)
         resolved_path = os.path.abspath(os.path.join(project_dir, clean_rel))
 
-        if not resolved_path.startswith(project_dir) or not os.path.exists(resolved_path) or not os.path.isdir(resolved_path):
+        if not is_path_within(resolved_path, project_dir) or not os.path.exists(resolved_path) or not os.path.isdir(resolved_path):
             return web.json_response({"error": "Invalid or non-existent path", "path": path_param}, status=400)
 
         try:
@@ -210,12 +220,12 @@ def install(ctx):
             parent_path = None
             if resolved_path != project_dir:
                 parent_abs = os.path.dirname(resolved_path)
-                if parent_abs.startswith(project_dir):
+                if is_path_within(parent_abs, project_dir):
                     rel_parent = os.path.relpath(parent_abs, project_dir)
                     parent_path = "" if rel_parent == "." else rel_parent
 
             user_projects_dir = os.path.abspath(os.path.join(ctx.get_user_path(user), "projects"))
-            if resolved_path.startswith(user_projects_dir):
+            if is_path_within(resolved_path, user_projects_dir):
                 rel_proj = os.path.relpath(resolved_path, user_projects_dir)
                 display_path = "~/" if rel_proj == "." else f"~/{rel_proj}"
             elif proj:
@@ -460,7 +470,7 @@ def install(ctx):
         publish_dir = sanitize_publish_path(project.get("publish"), project_dir)
         resolved_publish_dir = os.path.abspath(os.path.join(project_dir, publish_dir))
 
-        if not resolved_publish_dir.startswith(project_dir):
+        if not is_path_within(resolved_publish_dir, project_dir):
             raise Exception("Publish directory must be within the project folder")
 
         if (

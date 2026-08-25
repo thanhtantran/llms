@@ -22,12 +22,10 @@ classifiers = [
 
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -35,7 +33,7 @@ classifiers = [
     "Topic :: Utilities",
     "Environment :: Console",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.11"
 dependencies = [
     "aiohttp"
 ]
@@ -55,9 +53,12 @@ packages = ["llms"]
 [tool.setuptools.package-data]
 llms = ["index.html", "llms.json", "providers.json", "providers-extra.json", "extensions/**/*", "ui/**/*"]
 
+[tool.setuptools.exclude-package-data]
+llms = ["**/__pycache__/*", "**/*.pyc"]
+
 [tool.ruff]
 # Set the target Python version
-target-version = "py37"
+target-version = "py311"
 
 # Set line length
 line-length = 120

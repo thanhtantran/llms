@@ -23,6 +23,8 @@ To prevent infinite loops or excessive resource consumption, the following limit
     - Python: **1 GB** virtual memory limit.
     - JavaScript/TypeScript/C#: **8 GB** virtual memory limit (higher limit to accommodate runtime overhead).
 
+On Windows, generated files are executed directly without requiring Bash. The 10-second wall-clock timeout is enforced, but `ulimit` CPU and virtual-memory limits are not available.
+
 ### File System
 - Each execution runs in a **clean, temporary directory**.
 - Converting `LLMS_RUN_AS` will try to `chmod 777` this directory so the target user can write to it.
@@ -40,6 +42,8 @@ By default, code runs as the user running the LLMS process. For enhanced securit
 ### Configuration
 
 Set the `LLMS_RUN_AS` environment variable to the username you want code to run as.
+
+`LLMS_RUN_AS` is supported on Linux/macOS only. Windows returns a clear unsupported-setting error instead of attempting to invoke `sudo`.
 
 **Example:**
 ```bash

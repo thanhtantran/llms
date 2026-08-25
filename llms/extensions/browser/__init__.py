@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 from collections import deque
@@ -20,10 +21,35 @@ DEBUG_LOG = deque(maxlen=200)
 DEBUG_LOG_COUNTER = 0
 
 
+def find_bash():
+    found = shutil.which("bash")
+    if found or sys.platform != "win32":
+        return found
+
+    candidates = []
+    for root in (os.getenv("PROGRAMFILES"), os.getenv("LOCALAPPDATA")):
+        if root:
+            candidates.extend(
+                [
+                    os.path.join(root, "Git", "bin", "bash.exe"),
+                    os.path.join(root, "Programs", "Git", "bin", "bash.exe"),
+                ]
+            )
+    return next((path for path in candidates if os.path.isfile(path)), None)
+
+
+BASH_PATH = find_bash()
+
+
 def install(ctx):
     # Check for agent-browser binary
     if not shutil.which("agent-browser"):
         ctx.log("agent-browser not found. See https://agent-browser.dev/installation to use the browser extension.")
+        ctx.disabled = True
+        return
+
+    if not BASH_PATH:
+        ctx.log("Browser extension requires Bash. Install Git for Windows and ensure bash.exe is available.")
         ctx.disabled = True
         return
 
@@ -451,7 +477,7 @@ def install(ctx):
         if not os.path.exists(path):
             return web.json_response({"error": "Script not found"}, status=404)
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
 
         return web.json_response({"name": name, "content": content})
@@ -474,7 +500,7 @@ def install(ctx):
         name = os.path.basename(name)
         path = os.path.join(get_script_dir(req), name)
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
 
         os.chmod(path, 0o755)
@@ -514,19 +540,19 @@ def install(ctx):
             log = _begin_debug_log(f"bash {path}")
             with os.fdopen(out_fd, "w") as out_f, os.fdopen(err_fd, "w") as err_f:
                 proc = await asyncio.create_subprocess_exec(
-                    "bash",
+                    BASH_PATH,
                     path,
                     stdout=out_f,
                     stderr=err_f,
                     env={**os.environ, "AGENT_BROWSER_SESSION": "default"},
-                    start_new_session=True,
+                    start_new_session=sys.platform != "win32",
                 )
                 await asyncio.wait_for(proc.wait(), timeout=AGENT_BROWSER_TIMEOUT)
 
             result = {
                 "success": proc.returncode == 0,
-                "stdout": Path(out_path).read_text(),
-                "stderr": Path(err_path).read_text(),
+                "stdout": Path(out_path).read_text(encoding="utf-8", errors="replace"),
+                "stderr": Path(err_path).read_text(encoding="utf-8", errors="replace"),
                 "returncode": proc.returncode,
             }
             _complete_debug_log(log, result)
@@ -542,7 +568,10 @@ def install(ctx):
             }
             _complete_debug_log(log, result)
             try:
-                os.killpg(os.getpgid(proc.pid), 9)
+                if sys.platform == "win32":
+                    proc.kill()
+                else:
+                    os.killpg(os.getpgid(proc.pid), 9)
             except (ProcessLookupError, OSError):
                 proc.kill()
             success, screenshot_path, snapshot_path = await run_snapshot(req)
@@ -572,7 +601,7 @@ def install(ctx):
             log = _begin_debug_log(f"bash -c {content[:100]}")
             with os.fdopen(out_fd, "w") as out_f, os.fdopen(err_fd, "w") as err_f:
                 proc = await asyncio.create_subprocess_exec(
-                    "bash",
+                    BASH_PATH,
                     "-c",
                     content,
                     stdout=out_f,

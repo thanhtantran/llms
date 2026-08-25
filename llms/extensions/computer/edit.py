@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated, Any, List, Literal, get_args
 
 from .base import BaseTool, CLIResult, ToolError, ToolResult
-from .run import maybe_truncate, run
+from .run import maybe_truncate
 
 Command_20250124 = Literal[
     "view",
@@ -89,7 +89,7 @@ class EditTool20250124(BaseTool):
         if not path.is_absolute():
             suggested_path = Path("") / path
             raise ToolError(
-                f"The path {path} is not an absolute path, it should start with `/`. Maybe you meant {suggested_path}?"
+                f"The path {path} is not an absolute path. Maybe you meant {suggested_path.resolve()}?"
             )
         # Check if path exists
         if not path.exists() and command != "create":
@@ -109,10 +109,21 @@ class EditTool20250124(BaseTool):
             if view_range:
                 raise ToolError("The `view_range` parameter is not allowed when `path` points to a directory.")
 
-            _, stdout, stderr = await run(rf"find {path} -maxdepth 2 -not -path '*/\.*'")
-            if not stderr:
-                stdout = f"Here's the files and directories up to 2 levels deep in {path}, excluding hidden items:\n{stdout}\n"
-            return CLIResult(output=stdout, error=stderr)
+            entries = []
+            for child in sorted(path.iterdir(), key=lambda item: item.name.lower()):
+                if child.name.startswith("."):
+                    continue
+                entries.append(str(child))
+                if child.is_dir():
+                    entries.extend(
+                        str(grandchild)
+                        for grandchild in sorted(child.iterdir(), key=lambda item: item.name.lower())
+                        if not grandchild.name.startswith(".")
+                    )
+            output = "\n".join(entries)
+            return CLIResult(
+                output=f"Here's the files and directories up to 2 levels deep in {path}, excluding hidden items:\n{output}\n"
+            )
 
         file_content = self.read_file(path)
         init_line = 1
@@ -230,14 +241,14 @@ class EditTool20250124(BaseTool):
     def read_file(self, path: Path):
         """Read the content of a file from a given path; raise a ToolError if an error occurs."""
         try:
-            return path.read_text()
+            return path.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
             raise ToolError(f"Ran into {e} while trying to read {path}") from None
 
     def write_file(self, path: Path, file: str):
         """Write the content of a file to a given path; raise a ToolError if an error occurs."""
         try:
-            path.write_text(file)
+            path.write_text(file, encoding="utf-8")
         except Exception as e:
             raise ToolError(f"Ran into {e} while trying to write to {path}") from None
 

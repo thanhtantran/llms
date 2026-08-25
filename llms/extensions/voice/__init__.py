@@ -331,9 +331,8 @@ def install(ctx):
             f" type={getattr(audio_file, 'content_type', '?')} magic={audio_bytes[:12].hex()}"
         )
         if os.getenv("LLMS_VOICE_DUMP") == "1":
-            dump = os.path.join(
-                os.getenv("LLMS_HOME", os.path.join(os.getenv("HOME", "."), ".llms")),
-                "voice-upload" + (os.path.splitext(audio_file.filename or "")[1] or ".bin"),
+            dump = ctx.get_home_path(
+                "voice-upload" + (os.path.splitext(audio_file.filename or "")[1] or ".bin")
             )
             try:
                 with open(dump, "wb") as f:

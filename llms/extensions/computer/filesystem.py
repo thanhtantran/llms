@@ -76,7 +76,7 @@ def _validate_path(path_str: str, user: Optional[str] = None) -> str:
 
     # Get absolute path
     try:
-        abs_path = os.path.abspath(path_str)
+        abs_path = os.path.realpath(os.path.abspath(path_str))
     except Exception as e:
         raise ValueError(f"Invalid path: {e}") from e
 
@@ -84,13 +84,13 @@ def _validate_path(path_str: str, user: Optional[str] = None) -> str:
     is_allowed = False
     allowed_dirs = get_allowed_directories(user)
     for allowed_dir in allowed_dirs:
-        # Check if abs_path starts with allowed_dir
-        # We add os.sep to ensure we don't match /app2 when allowed is /app
-        allowed_dir_str = str(allowed_dir)
-        if not allowed_dir_str.endswith(os.sep):
-            allowed_dir_str += os.sep
-
-        if abs_path.startswith(allowed_dir_str) or abs_path == allowed_dir:
+        allowed_dir_path = os.path.realpath(os.path.abspath(str(allowed_dir)))
+        try:
+            common = os.path.commonpath([os.path.normcase(abs_path), os.path.normcase(allowed_dir_path)])
+        except ValueError:
+            # Different drives on Windows cannot share a common path.
+            continue
+        if common == os.path.normcase(allowed_dir_path):
             is_allowed = True
             break
 

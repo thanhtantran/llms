@@ -11,6 +11,7 @@ import math
 import operator
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -178,6 +179,59 @@ cpu_time_limit = 5  # Max CPU time 5 seconds
 resource_limits = f"ulimit -t {cpu_time_limit}; ulimit -v {mem_limit};"
 
 
+def _code_execution_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Return a minimal environment that still supports Windows runtimes."""
+    env = {"PATH": os.environ.get("PATH", "")}
+    if os.name == "nt":
+        for name in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
+            if name in os.environ:
+                env[name] = os.environ[name]
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _run_code_process(
+    args: List[str], temp_dir: str, code: str, tool_name: str, extra_env: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Run a generated source file without requiring Bash on Windows."""
+    run_as = os.environ.get("LLMS_RUN_AS")
+    if os.name == "nt":
+        if run_as:
+            return {
+                "stdout": "",
+                "stderr": "LLMS_RUN_AS is not supported on Windows.",
+                "returncode": -1,
+            }
+        command = args
+        display_command = subprocess.list2cmdline(args)
+    else:
+        command_text = f"{resource_limits} {shlex.join(args)}"
+        if run_as:
+            with contextlib.suppress(Exception):
+                os.chmod(temp_dir, 0o777)
+            command_text = f"sudo -u {shlex.quote(run_as)} bash -c {shlex.quote(command_text)}"
+        command = ["bash", "-c", command_text]
+        display_command = command_text
+
+    try:
+        g_ctx.dbg(f"{tool_name} ({temp_dir}): {display_command}\n{code}")
+        result = subprocess.run(
+            command,
+            cwd=temp_dir,
+            env=_code_execution_env(extra_env),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            errors="replace",
+        )
+        return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": "Execution timed out", "returncode": -1}
+    except Exception as e:
+        return {"stdout": "", "stderr": f"Error: {e}", "returncode": -1}
+
+
 def run_python(code: str) -> Dict[str, Any]:
     """
     Execute Python code in a temporary sandboxed environment.
@@ -189,29 +243,7 @@ def run_python(code: str) -> Dict[str, Any]:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        cmd = f"{resource_limits} {sys.executable} script.py"
-
-        run_as = os.environ.get("LLMS_RUN_AS")
-        if run_as:
-            # Grant access to temp_dir
-            with contextlib.suppress(Exception):
-                os.chmod(temp_dir, 0o777)
-            cmd = f"sudo -u {run_as} bash -c '{cmd}'"
-
-        try:
-            # Run with restricted environment
-            # We keep PATH to find basic tools if needed, but remove sensitive vars
-            clean_env = {"PATH": os.environ.get("PATH", "")}
-
-            g_ctx.dbg(f"run_python ({temp_dir}): {cmd}\n{code}")
-            result = subprocess.run(
-                ["bash", "-c", cmd], cwd=temp_dir, env=clean_env, capture_output=True, text=True, timeout=10
-            )
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": "Execution timed out", "returncode": -1}
-        except Exception as e:
-            return {"stdout": "", "stderr": f"Error: {e}", "returncode": -1}
+        return _run_code_process([sys.executable, "script.py"], temp_dir, code, "run_python")
 
 
 def run_javascript(code: str) -> Dict[str, Any]:
@@ -229,27 +261,7 @@ def run_javascript(code: str) -> Dict[str, Any]:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        cmd = f"{resource_limits} {runtime} script.js"
-
-        run_as = os.environ.get("LLMS_RUN_AS")
-        if run_as:
-            with contextlib.suppress(Exception):
-                os.chmod(temp_dir, 0o777)
-            cmd = f"sudo -u {run_as} bash -c '{cmd}'"
-
-        try:
-            # Run with restricted environment
-            clean_env = {"PATH": os.environ.get("PATH", "")}
-
-            g_ctx.dbg(f"run_javascript ({temp_dir}): {cmd}\n{code}")
-            result = subprocess.run(
-                ["bash", "-c", cmd], cwd=temp_dir, env=clean_env, capture_output=True, text=True, timeout=10
-            )
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": "Execution timed out", "returncode": -1}
-        except Exception as e:
-            return {"stdout": "", "stderr": f"Error: {e}", "returncode": -1}
+        return _run_code_process([runtime, "script.js"], temp_dir, code, "run_javascript")
 
 
 def run_typescript(code: str) -> Dict[str, Any]:
@@ -267,27 +279,7 @@ def run_typescript(code: str) -> Dict[str, Any]:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        cmd = f"{resource_limits} {runtime} script.ts"
-
-        run_as = os.environ.get("LLMS_RUN_AS")
-        if run_as:
-            with contextlib.suppress(Exception):
-                os.chmod(temp_dir, 0o777)
-            cmd = f"sudo -u {run_as} bash -c '{cmd}'"
-
-        try:
-            # Run with restricted environment
-            clean_env = {"PATH": os.environ.get("PATH", "")}
-
-            g_ctx.dbg(f"run_typescript ({temp_dir}): {cmd}\n{code}")
-            result = subprocess.run(
-                ["bash", "-c", cmd], cwd=temp_dir, env=clean_env, capture_output=True, text=True, timeout=10
-            )
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": "Execution timed out", "returncode": -1}
-        except Exception as e:
-            return {"stdout": "", "stderr": f"Error: {e}", "returncode": -1}
+        return _run_code_process([runtime, "script.ts"], temp_dir, code, "run_typescript")
 
 
 def run_csharp(code: str) -> Dict[str, Any]:
@@ -306,32 +298,13 @@ def run_csharp(code: str) -> Dict[str, Any]:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        # Note: 'dotnet run script.cs' is the command as per user request for .NET 10
-        cmd = f"{resource_limits} {runtime} run script.cs"
-
-        run_as = os.environ.get("LLMS_RUN_AS")
-        if run_as:
-            with contextlib.suppress(Exception):
-                os.chmod(temp_dir, 0o777)
-            # For dotnet, we need to set HOME and DOTNET_CLI_HOME to temp_dir for write access
-            cmd = f"sudo -u {run_as} env HOME={temp_dir} DOTNET_CLI_HOME={temp_dir} bash -c '{cmd}'"
-
-        try:
-            # Run with restricted environment
-            clean_env = {"PATH": os.environ.get("PATH", "")}
-
-            # Dotnet might need some ENV vars to work correctly, usually DOTNET_CLI_HOME or similar if strictly sandboxed
-            # But we are keeping PATH, hopefully commonly needed vars are there or default works.
-            # We might want to pass more env vars if it fails.
-            g_ctx.dbg(f"run_csharp ({temp_dir}): {cmd}\n{code}")
-            result = subprocess.run(
-                ["bash", "-c", cmd], cwd=temp_dir, env=clean_env, capture_output=True, text=True, timeout=10
-            )
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": "Execution timed out", "returncode": -1}
-        except Exception as e:
-            return {"stdout": "", "stderr": f"Error: {e}", "returncode": -1}
+        # 'dotnet run script.cs' uses .NET 10+ single-file execution.
+        runtime_home = {"DOTNET_CLI_HOME": temp_dir}
+        if os.name != "nt":
+            runtime_home["HOME"] = temp_dir
+        return _run_code_process(
+            [runtime, "run", "script.cs"], temp_dir, code, "run_csharp", extra_env=runtime_home
+        )
 
 
 # -----------------------------

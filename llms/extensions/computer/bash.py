@@ -1,4 +1,5 @@
 import asyncio
+import locale
 import os
 import sys
 from typing import Annotated, Any, Literal
@@ -7,32 +8,39 @@ from .base import BaseTool, CLIResult, ToolError, ToolResult
 
 
 class _BashSession:
-    """A session of a bash shell."""
+    """A persistent native shell session (Bash on Unix, cmd.exe on Windows)."""
 
     _started: bool
     _process: asyncio.subprocess.Process
 
-    command: str = "/bin/bash"
     _output_delay: float = 0.2  # seconds
     _timeout: float = 120.0  # seconds
-    _sentinel: str = "<<exit>>"
+    _sentinel: str = "__LLMS_COMMAND_COMPLETE__"
 
     def __init__(self):
         self._started = False
         self._timed_out = False
+        self._is_windows = sys.platform == "win32"
+        self.command = (
+            os.environ.get("COMSPEC", "cmd.exe")
+            if self._is_windows
+            else os.environ.get("LLMS_SHELL", "/bin/bash")
+        )
+        self._encoding = locale.getpreferredencoding(False) if self._is_windows else "utf-8"
 
     async def start(self):
         if self._started:
             return
 
-        self._process = await asyncio.create_subprocess_shell(
-            self.command,
-            preexec_fn=os.setsid,
-            shell=True,
+        args = [self.command, "/D", "/Q"] if self._is_windows else [self.command]
+        kwargs = {} if self._is_windows else {"start_new_session": True}
+        self._process = await asyncio.create_subprocess_exec(
+            *args,
             bufsize=0,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **kwargs,
         )
 
         self._started = True
@@ -65,7 +73,11 @@ class _BashSession:
         assert self._process.stderr
 
         # send command to the process
-        self._process.stdin.write(command.encode() + f"; echo '{self._sentinel}'\n".encode())
+        if self._is_windows:
+            command_line = f"{command} & echo {self._sentinel}\r\n"
+        else:
+            command_line = f"{command}; printf '%s\\n' '{self._sentinel}'\n"
+        self._process.stdin.write(command_line.encode(self._encoding, errors="replace"))
         await self._process.stdin.drain()
 
         # read output from the process, until the sentinel is found
@@ -75,7 +87,9 @@ class _BashSession:
                     await asyncio.sleep(self._output_delay)
                     # if we read directly from stdout/stderr, it will wait forever for
                     # EOF. use the StreamReader buffer directly instead.
-                    output = self._process.stdout._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
+                    output = self._process.stdout._buffer.decode(  # pyright: ignore[reportAttributeAccessIssue]
+                        self._encoding, errors="replace"
+                    )
                     if self._sentinel in output:
                         # strip the sentinel and break
                         output = output[: output.index(self._sentinel)]
@@ -86,11 +100,17 @@ class _BashSession:
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             ) from None
 
-        if output.endswith("\n"):
+        if output.endswith("\r\n"):
+            output = output[:-2]
+        elif output.endswith("\n"):
             output = output[:-1]
 
-        error = self._process.stderr._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
-        if error.endswith("\n"):
+        error = self._process.stderr._buffer.decode(  # pyright: ignore[reportAttributeAccessIssue]
+            self._encoding, errors="replace"
+        )
+        if error.endswith("\r\n"):
+            error = error[:-2]
+        elif error.endswith("\n"):
             error = error[:-1]
 
         # clear the buffers so that the next output can be read correctly
@@ -102,7 +122,7 @@ class _BashSession:
 
 class BashTool20250124(BaseTool):
     """
-    A tool that allows the agent to run bash commands.
+    A tool that allows the agent to run shell commands.
     The tool parameters are defined by Anthropic and are not editable.
     """
 
@@ -152,7 +172,7 @@ async def run_bash(
     restart: Annotated[bool, "Restart the bash session"] = False,
 ) -> list[dict[str, Any]]:
     """
-    A tool that allows the agent to run bash commands.
+    Run a command in a persistent native shell session.
     """
     global g_tool
     if g_tool is None:
@@ -173,13 +193,21 @@ async def open(target: Annotated[str, "URL or file path to open"]) -> list[dict[
     if not target:
         raise ValueError("No target specified")
 
-    platform = sys.platform
+    if sys.platform == "win32":
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            raise RuntimeError("Windows shell opener is unavailable")
+        startfile(target)
+        return ToolResult(system=f"Opened {target}").to_tool_results()
 
-    if platform == "darwin":
-        cmd = ["open", target]
-    elif platform == "win32":
-        cmd = ["cmd", "/c", "start", "", target]
-    else:  # Linux and other Unix-like
-        cmd = ["xdg-open", target]
-
-    return await run_bash(command=" ".join(cmd))
+    cmd = ["open", target] if sys.platform == "darwin" else ["xdg-open", target]
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    result = CLIResult(
+        output=stdout.decode(errors="replace").strip() or None,
+        error=stderr.decode(errors="replace").strip() or None,
+        system=f"Opened {target}" if process.returncode == 0 else None,
+    )
+    return result.to_tool_results()
